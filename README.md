@@ -29,7 +29,7 @@ lambda-cicd/
 
 ```bash
 # 1. Clone the repo
-git clone <your-repo-url>
+git clone https://github.com/bhorvic/lambda-cicd.git
 cd lambda-cicd
 
 # 2. Create your config file from the example
