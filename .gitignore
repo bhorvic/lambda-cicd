@@ -1,0 +1,26 @@
+# Local config (contains secrets/env-specific values)
+config/config.env
+
+# Build artifacts
+.build/
+*.zip
+.auto_created_bucket
+
+# Lambda response files from smoke tests
+response.json
+trust-policy.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.env
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
