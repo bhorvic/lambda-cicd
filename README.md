@@ -18,6 +18,17 @@ lambda-cicd/
 └── .gitignore
 ```
 
+## Shell Requirement
+
+The deploy and cleanup scripts require **bash**. They are not compatible with `sh`, PowerShell, or other shells.
+
+| OS | How to run |
+|----|------------|
+| Linux / macOS | Any terminal — bash is available by default |
+| Windows | Use **Git Bash** (included with [Git for Windows](https://git-scm.com/downloads)) or **WSL** (Windows Subsystem for Linux) |
+
+To open Git Bash on Windows, right-click a folder and select **Git Bash Here**, or launch it from the Start menu.
+
 ## Prerequisites
 
 - AWS CLI installed and configured (`aws configure`)
