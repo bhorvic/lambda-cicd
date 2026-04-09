@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run tests
+        run: python3 tests/test_lambda.py
+
+      - name: Verify deploy script is executable
+        run: |
+          chmod +x scripts/deploy.sh scripts/cleanup.sh
+          bash -n scripts/deploy.sh
+          bash -n scripts/cleanup.sh
