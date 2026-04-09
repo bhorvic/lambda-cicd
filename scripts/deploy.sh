@@ -179,10 +179,12 @@ aws lambda invoke \
     --region "${REGION}" \
     "${RESPONSE_FILE}"
 
-if grep -q "Success" "${RESPONSE_FILE}"; then
-    echo "✓ Smoke test passed!"
+STATUS_CODE=$(python3 -c "import json; d=json.load(open('${RESPONSE_FILE}')); print(d.get('statusCode', 0))" 2>/dev/null || echo 0)
+if [ "${STATUS_CODE}" = "200" ]; then
+    echo "✓ Smoke test passed! (statusCode: ${STATUS_CODE})"
 else
-    echo "✗ Smoke test failed! Response:"
+    echo "✗ Smoke test failed! (statusCode: ${STATUS_CODE})"
+    echo "Response:"
     cat "${RESPONSE_FILE}"
     exit 1
 fi
