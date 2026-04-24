@@ -9,9 +9,72 @@
 #   - Copy config/config.env.example to config/config.env and fill in values
 #   - S3 bucket will be created automatically if it doesn't exist
 
-set -e
+set -Eeuo pipefail
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "ERROR: required command not found: $1"
+        exit 1
+    fi
+}
+
+wait_for_lambda_ready() {
+    local function_name="$1"
+    local attempts=30
+    local delay=2
+    local state=""
+    local last_update_status=""
+
+    echo "Waiting for Lambda to become ready..."
+
+    for ((i=1; i<=attempts; i++)); do
+        state=$(aws lambda get-function-configuration \
+            --function-name "${function_name}" \
+            --region "${REGION}" \
+            --query 'State' \
+            --output text 2>/dev/null || true)
+
+        last_update_status=$(aws lambda get-function-configuration \
+            --function-name "${function_name}" \
+            --region "${REGION}" \
+            --query 'LastUpdateStatus' \
+            --output text 2>/dev/null || true)
+
+        if [ "${state}" = "Active" ] && [ "${last_update_status}" = "Successful" ]; then
+            echo "✓ Lambda is ready."
+            return 0
+        fi
+
+        if [ "${last_update_status}" = "Failed" ]; then
+            echo "ERROR: Lambda update failed."
+            aws lambda get-function-configuration \
+                --function-name "${function_name}" \
+                --region "${REGION}" \
+                --query '{State: State, LastUpdateStatus: LastUpdateStatus, LastUpdateStatusReason: LastUpdateStatusReason}'
+            exit 1
+        fi
+
+        sleep "${delay}"
+    done
+
+    echo "ERROR: Timed out waiting for Lambda to become ready."
+    exit 1
+}
+
+cleanup_build() {
+    if [ -n "${BUILD_DIR:-}" ] && [ -d "${BUILD_DIR}" ]; then
+        rm -rf "${BUILD_DIR}"
+    fi
+}
+
+trap cleanup_build EXIT
 
 # ── Config ─────────────────────────────────────────────────────────────────────
+require_cmd aws
+require_cmd python3
+require_cmd zip
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_FILE="${REPO_ROOT}/config/config.env"
@@ -22,6 +85,7 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     exit 1
 fi
 
+# shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 
 : "${REGION:?config.env must define REGION}"
@@ -30,7 +94,7 @@ source "${CONFIG_FILE}"
 
 # BUCKET_NAME is optional — if not set, auto-generate one from the account ID
 BUCKET_OWNER_MANAGED=false
-if [ -z "${BUCKET_NAME}" ]; then
+if [ -z "${BUCKET_NAME:-}" ]; then
     ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
     BUCKET_NAME="${FUNCTION_NAME}-deploy-${ACCOUNT_ID}"
     BUCKET_OWNER_MANAGED=true
@@ -61,7 +125,10 @@ python3 "${TESTS_DIR}/test_lambda.py"
 # ── Step 2: Package ────────────────────────────────────────────────────────────
 echo ""
 echo "[BUILD] Step 2: Packaging application..."
-(cd "${SRC_DIR}" && zip "${ZIP_PATH}" lambda_function.py)
+(
+    cd "${SRC_DIR}"
+    zip -q "${ZIP_PATH}" lambda_function.py
+)
 echo "Created ${ZIP_PATH}"
 
 # ── Step 3: Ensure S3 bucket exists ───────────────────────────────────────────
@@ -108,17 +175,17 @@ aws s3 cp "${ZIP_PATH}" "s3://${BUCKET_NAME}/lambda-builds/${ZIP_NAME}"
 # ── Step 5: Create or update function ─────────────────────────────────────────
 echo ""
 echo "[DEPLOY] Step 5: Checking if Lambda function exists..."
-if aws lambda get-function --function-name "${FUNCTION_NAME}" --region "${REGION}" 2>/dev/null; then
+if aws lambda get-function --function-name "${FUNCTION_NAME}" --region "${REGION}" >/dev/null 2>&1; then
     echo "Function exists — updating code..."
     aws lambda update-function-code \
         --function-name "${FUNCTION_NAME}" \
         --s3-bucket "${BUCKET_NAME}" \
         --s3-key "lambda-builds/${ZIP_NAME}" \
-        --region "${REGION}"
+        --region "${REGION}" >/dev/null
 else
     echo "Function not found — creating it..."
 
-    if aws iam get-role --role-name "${ROLE_NAME}" 2>/dev/null; then
+    if aws iam get-role --role-name "${ROLE_NAME}" >/dev/null 2>&1; then
         ROLE_ARN=$(aws iam get-role --role-name "${ROLE_NAME}" --query 'Role.Arn' --output text)
     else
         echo "Creating IAM role ${ROLE_NAME}..."
@@ -157,8 +224,10 @@ EOF
         --zip-file "fileb://${ZIP_PATH}" \
         --region "${REGION}" \
         --timeout 30 \
-        --memory-size 128
+        --memory-size 128 >/dev/null
 fi
+
+wait_for_lambda_ready "${FUNCTION_NAME}"
 
 # ── Step 6: Publish version ────────────────────────────────────────────────────
 echo ""
@@ -177,20 +246,26 @@ RESPONSE_FILE="${BUILD_DIR}/response.json"
 aws lambda invoke \
     --function-name "${FUNCTION_NAME}:${VERSION_NUMBER}" \
     --region "${REGION}" \
-    "${RESPONSE_FILE}"
+    "${RESPONSE_FILE}" >/dev/null
 
-if grep -q "Success" "${RESPONSE_FILE}"; then
-    echo "✓ Smoke test passed!"
-else
-    echo "✗ Smoke test failed! Response:"
-    cat "${RESPONSE_FILE}"
-    exit 1
-fi
+python3 - <<'PY' "${RESPONSE_FILE}"
+import json
+import sys
 
-# ── Step 8: Cleanup ────────────────────────────────────────────────────────────
-echo ""
-echo "[CLEANUP] Step 8: Cleaning up build artifacts..."
-rm -rf "${BUILD_DIR}"
+response_path = sys.argv[1]
+with open(response_path, 'r', encoding='utf-8') as fh:
+    payload = json.load(fh)
+
+body = payload.get('body')
+if isinstance(body, str):
+    body = json.loads(body)
+
+message = body.get('message') if isinstance(body, dict) else None
+if message != 'Success!':
+    raise SystemExit(f"Smoke test failed: unexpected message {message!r}")
+PY
+
+echo "✓ Smoke test passed!"
 
 echo ""
 echo "=========================================="

@@ -4,11 +4,11 @@ A lightweight CLI-driven CI/CD pipeline for deploying AWS Lambda functions, with
 
 ## Repo Structure
 
-```
+```text
 lambda-cicd/
 ├── scripts/
 │   ├── deploy.sh        # Full build → package → upload → deploy → smoke test pipeline
-│   └── cleanup.sh       # Delete test Lambda functions and layers
+│   └── cleanup.sh       # Delete configured Lambda resources and optional extras
 ├── src/
 │   └── lambda_function.py   # Lambda handler (swap in your own)
 ├── tests/
@@ -22,18 +22,15 @@ lambda-cicd/
 
 The deploy and cleanup scripts require **bash**. They are not compatible with `sh`, PowerShell, or other shells.
 
-| OS | How to run |
-|----|------------|
-| Linux / macOS | Any terminal — bash is available by default |
-| Windows | Use **Git Bash** (included with [Git for Windows](https://git-scm.com/downloads)) or **WSL** (Windows Subsystem for Linux) |
-
-To open Git Bash on Windows, right-click a folder and select **Git Bash Here**, or launch it from the Start menu.
+- Linux / macOS: any terminal — bash is available by default
+- Windows: use **Git Bash** (included with Git for Windows) or **WSL**
 
 ## Prerequisites
 
 - AWS CLI installed and configured (`aws configure`)
 - Python 3.x available on PATH
-- An S3 bucket name specified in `config/config.env` — will be created automatically if it doesn't exist
+- `zip` installed and available on PATH
+- An S3 bucket name specified in `config/config.env` — or leave it blank and let the deploy script create one automatically
 - IAM permissions to manage Lambda functions, IAM roles, and S3
 
 ## Setup
@@ -47,7 +44,7 @@ cd lambda-cicd
 cp config/config.env.example config/config.env
 
 # 3. Edit config/config.env with your values
-#    REGION, BUCKET_NAME, FUNCTION_NAME, ROLE_NAME
+#    REGION, FUNCTION_NAME, optional BUCKET_NAME / ROLE_NAME / EXTRA_FUNCTIONS / LAYER_NAME
 
 # 4. Make scripts executable
 chmod +x scripts/deploy.sh scripts/cleanup.sh
@@ -61,16 +58,15 @@ chmod +x scripts/deploy.sh scripts/cleanup.sh
 
 The pipeline runs these steps:
 
-| Step | Description |
-|------|-------------|
-| 1    | Run unit tests from `tests/test_lambda.py` |
-| 2    | Package `src/lambda_function.py` into a versioned zip |
-| 3    | Create S3 bucket if it doesn't exist (public access blocked) |
-| 4    | Upload zip to S3 (`lambda-builds/` prefix) |
-| 5    | Create the Lambda function if it doesn't exist, otherwise update it |
-| 6    | Publish a numbered Lambda version |
-| 7    | Invoke the published version as a smoke test |
-| 8    | Clean up local build artifacts |
+1. Run unit tests from `tests/test_lambda.py`
+2. Package `src/lambda_function.py` into a versioned zip
+3. Create the S3 bucket if it doesn't exist (public access blocked)
+4. Upload the zip to S3 under `lambda-builds/`
+5. Create the Lambda function if it doesn't exist, otherwise update it
+6. Wait for Lambda to finish provisioning/updating
+7. Publish a numbered Lambda version
+8. Invoke the published version as a smoke test
+9. Clean up local build artifacts automatically
 
 ## Cleanup
 
@@ -78,7 +74,12 @@ The pipeline runs these steps:
 ./scripts/cleanup.sh
 ```
 
-Deletes the Lambda functions listed in `FUNCTIONS` and all versions of the `requests-layer` Lambda layer. Edit those arrays at the top of the script to match your environment.
+By default, cleanup deletes:
+
+- the `FUNCTION_NAME` defined in `config/config.env`
+- any comma-separated functions listed in `EXTRA_FUNCTIONS`
+- all versions of the layer named by `LAYER_NAME`
+- an auto-created S3 bucket, if `deploy.sh` created one
 
 ## Customizing the Lambda
 
@@ -93,4 +94,5 @@ Update `tests/test_lambda.py` to match your handler's expected inputs and output
 
 - `config/config.env` is `.gitignore`d — never commit it, as it contains environment-specific values.
 - The IAM role (`ROLE_NAME`) will be created automatically if it doesn't exist, with the `AWSLambdaBasicExecutionRole` managed policy attached.
-- Build artifacts are written to `.build/` (also `.gitignore`d) and cleaned up after a successful deploy.
+- Build artifacts are written to `.build/` and are removed automatically even if the deploy script exits early.
+- The smoke test validates the Lambda response JSON instead of checking for a raw string match.
